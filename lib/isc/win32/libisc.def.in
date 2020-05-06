@@ -535,11 +535,9 @@ isc_result_registerids
 isc_result_toid
 isc_result_totext
 isc_rwlock_destroy
-isc_rwlock_downgrade
 isc_rwlock_init
 isc_rwlock_lock
 isc_rwlock_trylock
-isc_rwlock_tryupgrade
 isc_rwlock_unlock
 isc_safe_memequal
 isc_safe_memwipe

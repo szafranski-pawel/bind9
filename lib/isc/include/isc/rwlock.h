@@ -35,7 +35,6 @@ typedef enum {
 
 struct isc_rwlock {
 	pthread_rwlock_t rwlock;
-	atomic_bool	 downgrade;
 };
 
 #else /* USE_PTHREAD_RWLOCK */
@@ -90,12 +89,6 @@ isc_rwlock_trylock(isc_rwlock_t *rwl, isc_rwlocktype_t type);
 
 isc_result_t
 isc_rwlock_unlock(isc_rwlock_t *rwl, isc_rwlocktype_t type);
-
-isc_result_t
-isc_rwlock_tryupgrade(isc_rwlock_t *rwl);
-
-void
-isc_rwlock_downgrade(isc_rwlock_t *rwl);
 
 void
 isc_rwlock_destroy(isc_rwlock_t *rwl);

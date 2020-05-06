@@ -37,7 +37,6 @@ isc_rwlock_init(isc_rwlock_t *rwl, unsigned int read_quota,
 	UNUSED(read_quota);
 	UNUSED(write_quota);
 	REQUIRE(pthread_rwlock_init(&rwl->rwlock, NULL) == 0);
-	atomic_init(&rwl->downgrade, false);
 	return (ISC_R_SUCCESS);
 }
 
@@ -48,18 +47,7 @@ isc_rwlock_lock(isc_rwlock_t *rwl, isc_rwlocktype_t type) {
 		REQUIRE(pthread_rwlock_rdlock(&rwl->rwlock) == 0);
 		break;
 	case isc_rwlocktype_write:
-		while (true) {
-			REQUIRE(pthread_rwlock_wrlock(&rwl->rwlock) == 0);
-			/* Unlock if in middle of downgrade operation */
-			if (atomic_load_acquire(&rwl->downgrade)) {
-				REQUIRE(pthread_rwlock_unlock(&rwl->rwlock) ==
-					0);
-				while (atomic_load_acquire(&rwl->downgrade)) {
-				}
-				continue;
-			}
-			break;
-		}
+		REQUIRE(pthread_rwlock_wrlock(&rwl->rwlock) == 0);
 		break;
 	default:
 		INSIST(0);
@@ -77,10 +65,6 @@ isc_rwlock_trylock(isc_rwlock_t *rwl, isc_rwlocktype_t type) {
 		break;
 	case isc_rwlocktype_write:
 		ret = pthread_rwlock_trywrlock(&rwl->rwlock);
-		if ((ret == 0) && atomic_load_acquire(&rwl->downgrade)) {
-			isc_rwlock_unlock(rwl, type);
-			return (ISC_R_LOCKBUSY);
-		}
 		break;
 	default:
 		INSIST(0);
@@ -104,20 +88,6 @@ isc_rwlock_unlock(isc_rwlock_t *rwl, isc_rwlocktype_t type) {
 	UNUSED(type);
 	REQUIRE(pthread_rwlock_unlock(&rwl->rwlock) == 0);
 	return (ISC_R_SUCCESS);
-}
-
-isc_result_t
-isc_rwlock_tryupgrade(isc_rwlock_t *rwl) {
-	UNUSED(rwl);
-	return (ISC_R_LOCKBUSY);
-}
-
-void
-isc_rwlock_downgrade(isc_rwlock_t *rwl) {
-	atomic_store_release(&rwl->downgrade, true);
-	isc_rwlock_unlock(rwl, isc_rwlocktype_write);
-	isc_rwlock_lock(rwl, isc_rwlocktype_read);
-	atomic_store_release(&rwl->downgrade, false);
 }
 
 void
@@ -509,59 +479,6 @@ isc_rwlock_trylock(isc_rwlock_t *rwl, isc_rwlocktype_t type) {
 #endif /* ifdef ISC_RWLOCK_TRACE */
 
 	return (ISC_R_SUCCESS);
-}
-
-isc_result_t
-isc_rwlock_tryupgrade(isc_rwlock_t *rwl) {
-	REQUIRE(VALID_RWLOCK(rwl));
-
-	int_fast32_t reader_incr = READER_INCR;
-
-	/* Try to acquire write access. */
-	atomic_compare_exchange_strong_acq_rel(&rwl->cnt_and_flag, &reader_incr,
-					       WRITER_ACTIVE);
-	/*
-	 * There must have been no writer, and there must have
-	 * been at least one reader.
-	 */
-	INSIST((reader_incr & WRITER_ACTIVE) == 0 &&
-	       (reader_incr & ~WRITER_ACTIVE) != 0);
-
-	if (reader_incr == READER_INCR) {
-		/*
-		 * We are the only reader and have been upgraded.
-		 * Now jump into the head of the writer waiting queue.
-		 */
-		atomic_fetch_sub_release(&rwl->write_completions, 1);
-	} else {
-		return (ISC_R_LOCKBUSY);
-	}
-
-	return (ISC_R_SUCCESS);
-}
-
-void
-isc_rwlock_downgrade(isc_rwlock_t *rwl) {
-	int32_t prev_readers;
-
-	REQUIRE(VALID_RWLOCK(rwl));
-
-	/* Become an active reader. */
-	prev_readers = atomic_fetch_add_release(&rwl->cnt_and_flag,
-						READER_INCR);
-	/* We must have been a writer. */
-	INSIST((prev_readers & WRITER_ACTIVE) != 0);
-
-	/* Complete write */
-	atomic_fetch_sub_release(&rwl->cnt_and_flag, WRITER_ACTIVE);
-	atomic_fetch_add_release(&rwl->write_completions, 1);
-
-	/* Resume other readers */
-	LOCK(&rwl->lock);
-	if (rwl->readers_waiting > 0) {
-		BROADCAST(&rwl->readable);
-	}
-	UNLOCK(&rwl->lock);
 }
 
 isc_result_t
