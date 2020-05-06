@@ -2009,8 +2009,8 @@ decrement_reference(dns_rbtdb_t *rbtdb, dns_rbtnode_t *node,
 		    rbtdb_serial_t least_serial, isc_rwlocktype_t nlock,
 		    isc_rwlocktype_t tlock, bool pruning) {
 	isc_result_t result;
-	bool write_locked;
 	bool locked = tlock != isc_rwlocktype_none;
+	bool write_locked = tlock == isc_rwlocktype_write;
 	rbtdb_nodelock_t *nodelock;
 	int bucket = node->locknum;
 	bool no_reference = true;
@@ -2065,28 +2065,16 @@ decrement_reference(dns_rbtdb_t *rbtdb, dns_rbtnode_t *node,
 	}
 
 	/*
-	 * Attempt to switch to a write lock on the tree.  If this fails,
-	 * we will add this node to a linked list of nodes in this locking
-	 * bucket which we will free later.
+	 * If we don't have any tree lock we can attempt to get a write lock.
+	 * If this fails, we will add this node to a linked list of nodes in
+	 * this locking bucket which we will free later.
 	 */
-	if (tlock != isc_rwlocktype_write) {
-		/*
-		 * Locking hierarchy notwithstanding, we don't need to free
-		 * the node lock before acquiring the tree write lock because
-		 * we only do a trylock.
-		 */
-		if (tlock == isc_rwlocktype_read) {
-			result = isc_rwlock_tryupgrade(&rbtdb->tree_lock);
-		} else {
-			result = isc_rwlock_trylock(&rbtdb->tree_lock,
-						    isc_rwlocktype_write);
-		}
+	if (tlock == isc_rwlocktype_none) {
+		result = isc_rwlock_trylock(&rbtdb->tree_lock,
+					    isc_rwlocktype_write);
 		RUNTIME_CHECK(result == ISC_R_SUCCESS ||
 			      result == ISC_R_LOCKBUSY);
-
 		write_locked = (result == ISC_R_SUCCESS);
-	} else {
-		write_locked = true;
 	}
 
 	refs = isc_refcount_decrement(&nodelock->references);
@@ -2138,18 +2126,10 @@ restore_locks:
 	}
 
 	/*
-	 * Relock a read lock, or unlock the write lock if no lock was held.
+	 * Unlock the write lock if no lock was held.
 	 */
-	if (tlock == isc_rwlocktype_none) {
-		if (write_locked) {
-			RWUNLOCK(&rbtdb->tree_lock, isc_rwlocktype_write);
-		}
-	}
-
-	if (tlock == isc_rwlocktype_read) {
-		if (write_locked) {
-			isc_rwlock_downgrade(&rbtdb->tree_lock);
-		}
+	if (tlock == isc_rwlocktype_none && write_locked) {
+		RWUNLOCK(&rbtdb->tree_lock, isc_rwlocktype_write);
 	}
 
 	return (no_reference);
