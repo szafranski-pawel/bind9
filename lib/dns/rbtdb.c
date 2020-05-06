@@ -166,8 +166,6 @@ typedef isc_rwlock_t nodelock_t;
 #define NODE_DESTROYLOCK(l) isc_rwlock_destroy(l)
 #define NODE_LOCK(l, t)	    RWLOCK((l), (t))
 #define NODE_UNLOCK(l, t)   RWUNLOCK((l), (t))
-#define NODE_TRYUPGRADE(l)  isc_rwlock_tryupgrade(l)
-#define NODE_DOWNGRADE(l)   isc_rwlock_downgrade(l)
 
 /*%
  * Whether to rate-limit updating the LRU to avoid possible thread contention.
@@ -4440,6 +4438,7 @@ static bool
 check_stale_header(dns_rbtnode_t *node, rdatasetheader_t *header,
 		   isc_rwlocktype_t *locktype, nodelock_t *lock,
 		   rbtdb_search_t *search, rdatasetheader_t **header_prev) {
+	UNUSED(lock);
 	if (!ACTIVE(header, search->now)) {
 		dns_ttl_t stale = header->rdh_ttl +
 				  search->rbtdb->serve_stale_ttl;
@@ -4461,8 +4460,7 @@ check_stale_header(dns_rbtnode_t *node, rdatasetheader_t *header,
 		 * cleaned up later.
 		 */
 		if ((header->rdh_ttl < search->now - RBTDB_VIRTUAL) &&
-		    (*locktype == isc_rwlocktype_write ||
-		     NODE_TRYUPGRADE(lock) == ISC_R_SUCCESS))
+		    (*locktype == isc_rwlocktype_write))
 		{
 			/*
 			 * We update the node's status only when we can
@@ -5710,8 +5708,7 @@ cache_findrdataset(dns_db_t *db, dns_dbnode_t *node, dns_dbversion_t *version,
 		header_next = header->next;
 		if (!ACTIVE(header, now)) {
 			if ((header->rdh_ttl < now - RBTDB_VIRTUAL) &&
-			    (locktype == isc_rwlocktype_write ||
-			     NODE_TRYUPGRADE(lock) == ISC_R_SUCCESS))
+			    (locktype == isc_rwlocktype_write))
 			{
 				/*
 				 * We update the node's status only when we
